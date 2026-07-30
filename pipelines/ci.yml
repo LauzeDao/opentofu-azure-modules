@@ -1,0 +1,133 @@
+name: ci-$(Date:yyyyMMdd)-$(Rev:r)
+
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - "*"
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - name: OPENTOFU_VERSION
+    value: 1.11.4
+  - name: TFLINT_VERSION
+    value: 0.59.1
+  - name: TF_IN_AUTOMATION
+    value: "true"
+  - name: TF_PLUGIN_CACHE_DIR
+    value: $(Pipeline.Workspace)/.tofu-plugin-cache
+  - name: TOFU_DIRS
+    value: ". modules/resource-group modules/networking modules/aks modules/acr modules/key-vault"
+
+jobs:
+  - job: verify
+    displayName: fmt · validate · test · lint
+    timeoutInMinutes: 25
+
+    steps:
+      - checkout: self
+        fetchDepth: 1
+
+      - script: |
+          set -euo pipefail
+          mkdir -p "$(Agent.ToolsDirectory)/tofu"
+          curl -fsSLo /tmp/tofu.zip \
+            "https://github.com/opentofu/opentofu/releases/download/v$(OPENTOFU_VERSION)/tofu_$(OPENTOFU_VERSION)_linux_amd64.zip"
+          unzip -oq /tmp/tofu.zip tofu -d "$(Agent.ToolsDirectory)/tofu"
+          chmod +x "$(Agent.ToolsDirectory)/tofu/tofu"
+          echo "##vso[task.prependpath]$(Agent.ToolsDirectory)/tofu"
+        displayName: Install OpenTofu $(OPENTOFU_VERSION)
+
+      - script: tofu version
+        displayName: Show OpenTofu version
+
+      - task: Cache@2
+        displayName: Cache provider plugins
+        inputs:
+          key: 'tofu-providers | "$(Agent.OS)" | **/.terraform.lock.hcl'
+          restoreKeys: |
+            tofu-providers | "$(Agent.OS)"
+          path: $(TF_PLUGIN_CACHE_DIR)
+
+      - script: |
+          set -euo pipefail
+          leaked=$(awk '
+            /^(subscription_id|tenant_id|deployer_principal_id)[[:space:]]*=/ {
+              gsub(/"/, "", $3)
+              if ($3 != "00000000-0000-0000-0000-000000000000") print $1
+            }' terraform.tfvars)
+          if [[ -n "$leaked" ]]; then
+            for key in $leaked; do
+              echo "##vso[task.logissue type=error]terraform.tfvars holds a non-placeholder value for $key"
+            done
+            echo "This repository is public. Real subscription and tenant identifiers must not be committed."
+            echo "Override them locally with TF_VAR_* environment variables instead."
+            exit 1
+          fi
+          echo "terraform.tfvars holds placeholders only."
+        displayName: Guard — no real Azure identifiers committed
+
+      - script: |
+          set -euo pipefail
+          tofu fmt -check -recursive -diff -no-color
+        displayName: tofu fmt -check
+
+      - script: |
+          set -uo pipefail
+          mkdir -p "$(TF_PLUGIN_CACHE_DIR)"
+          status=0
+          for dir in $(TOFU_DIRS); do
+            echo "----- $dir"
+            if ! tofu -chdir="$dir" init -backend=false -input=false -lockfile=readonly -no-color >/dev/null; then
+              echo "##vso[task.logissue type=error]init failed in $dir (a lock file missing linux_amd64 hashes is the usual cause)"
+              status=1
+              continue
+            fi
+            if ! tofu -chdir="$dir" validate -no-color; then
+              echo "##vso[task.logissue type=error]validate failed in $dir"
+              status=1
+            fi
+          done
+          exit $status
+        displayName: tofu validate
+
+      - script: |
+          set -uo pipefail
+          status=0
+          for dir in $(TOFU_DIRS); do
+            echo "----- $dir"
+            if ! tofu -chdir="$dir" test -no-color; then
+              echo "##vso[task.logissue type=error]tests failed in $dir"
+              status=1
+            fi
+          done
+          exit $status
+        displayName: tofu test
+
+      - task: Cache@2
+        displayName: Cache tflint plugins
+        inputs:
+          key: 'tflint | "$(Agent.OS)" | "$(TFLINT_VERSION)" | .tflint.hcl'
+          path: $(HOME)/.tflint.d/plugins
+
+      - script: |
+          set -euo pipefail
+          mkdir -p "$(Agent.ToolsDirectory)/tflint"
+          curl -fsSLo /tmp/tflint.zip \
+            "https://github.com/terraform-linters/tflint/releases/download/v$(TFLINT_VERSION)/tflint_linux_amd64.zip"
+          unzip -oq /tmp/tflint.zip tflint -d "$(Agent.ToolsDirectory)/tflint"
+          chmod +x "$(Agent.ToolsDirectory)/tflint/tflint"
+          echo "##vso[task.prependpath]$(Agent.ToolsDirectory)/tflint"
+        displayName: Install tflint $(TFLINT_VERSION)
+
+      - script: |
+          set -euo pipefail
+          tflint --init
+          tflint --recursive --config="$PWD/.tflint.hcl" --format compact
+        displayName: tflint

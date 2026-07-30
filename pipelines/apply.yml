@@ -1,0 +1,228 @@
+name: apply-$(Date:yyyyMMdd)-$(Rev:r)
+
+trigger: none
+pr: none
+
+parameters:
+  - name: environmentName
+    displayName: Environment segment (becomes part of every resource name)
+    type: string
+    default: dev
+    values:
+      - dev
+      - test
+
+  - name: destroyAfterwards
+    displayName: Destroy after verification (leave enabled unless you know why)
+    type: boolean
+    default: true
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - group: opentofu-azure
+  - name: OPENTOFU_VERSION
+    value: 1.11.4
+  - name: TF_IN_AUTOMATION
+    value: "true"
+  - name: TF_PLUGIN_CACHE_DIR
+    value: $(Pipeline.Workspace)/.tofu-plugin-cache
+  - name: PROJECT_NAME
+    value: ciaks
+  - name: STATE_KEY
+    value: ci-$(Build.BuildId).tfstate
+
+stages:
+  - stage: apply_verify_destroy
+    displayName: apply → verify → destroy
+    jobs:
+      - deployment: cluster
+        displayName: Build and tear down the cluster
+        environment: azure-apply
+        timeoutInMinutes: 90
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                  fetchDepth: 1
+
+                - script: |
+                    set -euo pipefail
+                    mkdir -p "$(Agent.ToolsDirectory)/tofu"
+                    curl -fsSLo /tmp/tofu.zip \
+                      "https://github.com/opentofu/opentofu/releases/download/v$(OPENTOFU_VERSION)/tofu_$(OPENTOFU_VERSION)_linux_amd64.zip"
+                    unzip -oq /tmp/tofu.zip tofu -d "$(Agent.ToolsDirectory)/tofu"
+                    chmod +x "$(Agent.ToolsDirectory)/tofu/tofu"
+                    echo "##vso[task.prependpath]$(Agent.ToolsDirectory)/tofu"
+                  displayName: Install OpenTofu $(OPENTOFU_VERSION)
+
+                - script: |
+                    set -euo pipefail
+                    cat >backend.tf <<'EOF'
+                    terraform {
+                      backend "azurerm" {
+                        use_azuread_auth = true
+                        use_oidc         = true
+                      }
+                    }
+                    EOF
+                    cat backend.tf
+                  displayName: Generate backend.tf
+
+                - task: AzureCLI@2
+                  displayName: tofu init and plan
+                  inputs:
+                    azureSubscription: $(AZURE_SERVICE_CONNECTION)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    addSpnToEnvironment: true
+                    inlineScript: |
+                      set -euo pipefail
+
+                      export ARM_USE_OIDC=true
+                      export ARM_USE_AZUREAD=true
+                      export ARM_OIDC_TOKEN="$idToken"
+                      export ARM_CLIENT_ID="$servicePrincipalId"
+                      export ARM_TENANT_ID="$tenantId"
+                      export ARM_SUBSCRIPTION_ID="$(AZURE_SUBSCRIPTION_ID)"
+
+                      deployer_object_id=`az ad sp show --id "$servicePrincipalId" --query id -o tsv`
+                      echo "##vso[task.setvariable variable=DEPLOYER_OBJECT_ID]$deployer_object_id"
+
+                      mkdir -p "$(TF_PLUGIN_CACHE_DIR)"
+
+                      tofu init -input=false -no-color \
+                        -backend-config="resource_group_name=$(TFSTATE_RESOURCE_GROUP)" \
+                        -backend-config="storage_account_name=$(TFSTATE_STORAGE_ACCOUNT)" \
+                        -backend-config="container_name=$(TFSTATE_CONTAINER)" \
+                        -backend-config="key=$(STATE_KEY)"
+
+                      tofu plan -input=false -no-color -out=tfplan \
+                        -var="subscription_id=$ARM_SUBSCRIPTION_ID" \
+                        -var="tenant_id=$ARM_TENANT_ID" \
+                        -var="deployer_principal_id=$deployer_object_id" \
+                        -var="project=$(PROJECT_NAME)" \
+                        -var="environment=${{ parameters.environmentName }}"
+
+                - task: AzureCLI@2
+                  displayName: tofu apply
+                  inputs:
+                    azureSubscription: $(AZURE_SERVICE_CONNECTION)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    addSpnToEnvironment: true
+                    inlineScript: |
+                      set -euo pipefail
+
+                      export ARM_USE_OIDC=true
+                      export ARM_USE_AZUREAD=true
+                      export ARM_OIDC_TOKEN="$idToken"
+                      export ARM_CLIENT_ID="$servicePrincipalId"
+                      export ARM_TENANT_ID="$tenantId"
+                      export ARM_SUBSCRIPTION_ID="$(AZURE_SUBSCRIPTION_ID)"
+
+                      tofu apply -input=false -auto-approve -no-color tfplan
+
+                - task: AzureCLI@2
+                  displayName: Verify the cluster answers kubectl
+                  inputs:
+                    azureSubscription: $(AZURE_SERVICE_CONNECTION)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    addSpnToEnvironment: true
+                    inlineScript: |
+                      set -euo pipefail
+
+                      export ARM_USE_OIDC=true
+                      export ARM_USE_AZUREAD=true
+                      export ARM_OIDC_TOKEN="$idToken"
+                      export ARM_CLIENT_ID="$servicePrincipalId"
+                      export ARM_TENANT_ID="$tenantId"
+                      export ARM_SUBSCRIPTION_ID="$(AZURE_SUBSCRIPTION_ID)"
+
+                      resource_group=`tofu output -raw resource_group_name`
+                      cluster=`tofu output -raw aks_cluster_name`
+                      registry=`tofu output -raw acr_name`
+
+                      az aks install-cli --only-show-errors
+                      az aks get-credentials \
+                        --resource-group "$resource_group" \
+                        --name "$cluster" \
+                        --overwrite-existing
+
+                      kubectl get nodes
+                      kubectl wait --for=condition=Ready nodes --all --timeout=10m
+                      echo "All nodes Ready."
+
+                      az acr login --name "$registry"
+                      echo "Registry login succeeded."
+
+                - ${{ if parameters.destroyAfterwards }}:
+                    - task: AzureCLI@2
+                      displayName: tofu destroy
+                      condition: always()
+                      inputs:
+                        azureSubscription: $(AZURE_SERVICE_CONNECTION)
+                        scriptType: bash
+                        scriptLocation: inlineScript
+                        addSpnToEnvironment: true
+                        inlineScript: |
+                          set -euo pipefail
+
+                          export ARM_USE_OIDC=true
+                          export ARM_USE_AZUREAD=true
+                          export ARM_OIDC_TOKEN="$idToken"
+                          export ARM_CLIENT_ID="$servicePrincipalId"
+                          export ARM_TENANT_ID="$tenantId"
+                          export ARM_SUBSCRIPTION_ID="$(AZURE_SUBSCRIPTION_ID)"
+
+                          tofu destroy -input=false -auto-approve -no-color \
+                            -var="subscription_id=$ARM_SUBSCRIPTION_ID" \
+                            -var="tenant_id=$ARM_TENANT_ID" \
+                            -var="deployer_principal_id=$(DEPLOYER_OBJECT_ID)" \
+                            -var="project=$(PROJECT_NAME)" \
+                            -var="environment=${{ parameters.environmentName }}"
+
+                    - task: AzureCLI@2
+                      displayName: Verify nothing was left behind
+                      condition: always()
+                      inputs:
+                        azureSubscription: $(AZURE_SERVICE_CONNECTION)
+                        scriptType: bash
+                        scriptLocation: inlineScript
+                        inlineScript: |
+                          set -euo pipefail
+                          prefix="$(PROJECT_NAME)-${{ parameters.environmentName }}"
+
+                          groups=`az group list --query "[?starts_with(name, 'rg-${prefix}')].name" -o tsv`
+                          node_groups=`az group list --query "[?contains(name, 'aks-${prefix}')].name" -o tsv`
+                          vaults=`az keyvault list-deleted --query "[?starts_with(name, 'kv-${prefix}')].name" -o tsv 2>/dev/null || true`
+
+                          leftovers=0
+                          if [[ -n "$groups" ]]; then
+                            echo "##vso[task.logissue type=error]orphaned resource groups: $groups"
+                            leftovers=1
+                          fi
+                          if [[ -n "$node_groups" ]]; then
+                            echo "##vso[task.logissue type=error]orphaned node resource groups: $node_groups"
+                            leftovers=1
+                          fi
+                          if [[ -n "$vaults" ]]; then
+                            echo "##vso[task.logissue type=error]soft-deleted key vaults still blocking the name: $vaults"
+                            leftovers=1
+                          fi
+
+                          if [[ $leftovers -ne 0 ]]; then
+                            echo "Destroy reported success but resources remain. These cost money."
+                            exit 1
+                          fi
+                          echo "Clean: no orphaned resource groups, no soft-deleted vaults."
+
+                - ${{ else }}:
+                    - script: |
+                        echo "##vso[task.logissue type=warning]destroyAfterwards was disabled — the cluster is STILL RUNNING and billing."
+                        echo "##vso[task.logissue type=warning]Tear it down manually; the state key is $(STATE_KEY)."
+                      displayName: Warn about a retained cluster
+                      condition: always()
