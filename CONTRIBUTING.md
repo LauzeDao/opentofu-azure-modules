@@ -25,6 +25,13 @@ sucht. Siehe [ADR 0009](docs/adr/0009-vereinfachtes-repo-layout.md).
 **Lesbarkeit vor Cleverness.** Kein `count`/`for_each`-Wildwuchs, keine ungeprüften
 `dynamic`-Blöcke.
 
+**Sprache richtet sich nach der Zielgruppe.** Was ein *Nutzer* der Bibliothek liest, ist
+englisch: [README](README.md), Modul-READMEs, alle `description`-Felder, alle
+Test-Fehlermeldungen. Was ein *Maintainer* liest, ist deutsch: diese Datei,
+[`docs/architecture.md`](docs/architecture.md), [`docs/deployment.md`](docs/deployment.md),
+[`docs/pipeline.md`](docs/pipeline.md) und die ADRs. Eine neue Datei folgt der Linie ihrer
+Zielgruppe, nicht der des Nachbarverzeichnisses.
+
 ## Modul-Contract
 
 Genau drei `.tf`-Dateien plus README und Tests:

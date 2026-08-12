@@ -266,13 +266,15 @@ Was Ebene 2 sehr wohl kann und Ebene 3 zu teuer für ist: alle `validation`-Bloc
 jede `for_each`-Verzweigung durchspielen, und das in Sekunden statt in 15 Minuten pro Cluster.
 Konkret sind es **168 Testfälle, davon 91 Negativtests**.
 
-Ebene 2 hat zusätzlich eine eigene Kompositionsstufe: `tests/example-aks-cluster/` plant das
-Beispiel-Root und prüft damit, was kein Einzelmodul sehen kann — abgeleitete Namen gegen die je
+Ebene 2 hat zusätzlich eine eigene Kompositionsstufe: `tests/composition.tftest.hcl` plant das
+Root-Modul und prüft damit, was kein Einzelmodul sehen kann — abgeleitete Namen gegen die je
 Service unterschiedlichen Azure-Regeln (ACR ohne Bindestriche, Key Vault max. 24 Zeichen), die
 `cidrsubnet`-Ableitung der Subnets, und die AcrPull-/Key-Vault-RBAC-Verdrahtung.
 
-Details zum Aufbau der Testdateien — inklusive der beiden Grenzen von `mock_provider`, die die
-Testform prägen: [`build-spec/06-tests-ci.md`](build-spec/06-tests-ci.md).
+Die beiden Grenzen von `mock_provider`, die die Testform prägen: ein Mock liefert keine
+berechneten Attribute (daher lösen die Kubelet-Identity-Outputs unter Test zu `null` auf statt
+den Plan abzubrechen), und er validiert keine Werte gegen Azure. Konventionen für neue
+Testdateien: [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ---
 

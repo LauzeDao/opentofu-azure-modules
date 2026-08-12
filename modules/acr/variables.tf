@@ -3,8 +3,8 @@ variable "name" {
     Registry name. **Alphanumeric only** — no hyphens, 5-50 characters.
 
     This is the most common ACR trip-hazard: the repo-wide `<project>-<env>-<resource>`
-    convention does not work here. The root module normalises it (see
-    examples/aks-cluster/main.tf) rather than this module hiding the problem.
+    convention does not work here. The root module normalises it (see the `names` local in
+    main.tf) rather than this module hiding the problem.
   EOT
   type        = string
 

@@ -66,8 +66,8 @@ module "acr" {
   multiplies the cost of every test run.
 
 - **`public_network_access_enabled` defaults to `true`.** Turning it off meaningfully means
-  private endpoints, which are Premium-only. Noted as a deliberate, documented skip in
-  `.checkov.yaml` (removed) rather than a silent inline suppression.
+  private endpoints, which are Premium-only. A deliberate departure from the security baseline,
+  recorded here rather than hidden behind an inline linter suppression.
 
 ## Tests
 

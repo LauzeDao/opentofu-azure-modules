@@ -62,7 +62,7 @@ output "key_vault_uri" {
 }
 
 output "verification_commands" {
-  description = "The commands that actually prove this example worked — see docs/build-spec/05-example-root.md §6."
+  description = "The commands that actually prove this deployment worked — see docs/deployment.md."
   value = join("\n", [
     "az aks get-credentials --resource-group ${module.resource_group.name} --name ${module.aks.name} --overwrite-existing",
     "kubectl get nodes",

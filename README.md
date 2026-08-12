@@ -9,6 +9,9 @@ This is a portfolio project. Its point is not "here is some Azure infrastructure
 time instead of mid-apply, tests that cost nothing to run, and written reasoning for the
 decisions a reviewer would otherwise read as mistakes.
 
+Which parts were hand-written and which were generated is stated in
+[How this repo was built](#how-this-repo-was-built).
+
 ## Modules
 
 | Module | Purpose |
@@ -35,10 +38,16 @@ cluster's kubelet identity, and Key Vault RBAC.
 │   └─ <name>/         main.tf, variables.tf, outputs.tf, README.md, tests/
 ├─ tests/              composition tests for the root module
 ├─ pipelines/          ci.yml (gate, no credentials), apply.yml (manual)
-└─ docs/               architecture, ADRs, deployment checklist, build specs
+└─ docs/               architecture, ADRs, deployment checklist
 ```
 
 Conventions, the module contract and how to add a module: [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+**Prose language follows the audience.** Everything a *consumer* of the library reads is
+English: this README, the module READMEs, every `description` field and every test error
+message. Everything a *maintainer* reads is German:
+[`CONTRIBUTING.md`](CONTRIBUTING.md), [`docs/architecture.md`](docs/architecture.md),
+[`docs/deployment.md`](docs/deployment.md), [`docs/pipeline.md`](docs/pipeline.md) and the ADRs.
 
 Three `.tf` files per module, no `versions.tf` — `required_providers` lives only in
 `provider.tf`. The `.tf` files carry no comments; explanations are in `description` fields,
@@ -185,3 +194,21 @@ not yet proven deployable, and the pipeline definitions are untried.
 
 Out of scope on purpose: multi-cloud abstraction, hosting a private module registry, the
 Kubernetes workloads themselves, and cost-management tooling.
+
+## How this repo was built
+
+Stated plainly, because it is a fair question to ask of any portfolio repository:
+
+- **The OpenTofu code is hand-written** — module contracts, the `validation` rules and their
+  thresholds, the composition and naming in `main.tf`. So is the reasoning: the ADRs in
+  [`docs/adr/`](docs/adr/) record actual decisions, including the ones that were reversed
+  ([ADR 0009](docs/adr/0009-vereinfachtes-repo-layout.md) undoes an earlier layout).
+- **The test suite was generated with AI assistance** from those contracts, then reviewed and
+  corrected by hand. That is what made the negative coverage affordable: 168 test cases, 91 of
+  them `expect_failures` blocks. Writing that many by hand is mechanical work; deciding *which*
+  rules need a negative test is not, and that decision stayed manual.
+- Each phase started from a written work-package spec — contract tables before code. Those were
+  planning artifacts rather than documentation and are not part of the repository.
+
+The division is deliberate. Test breadth is worth automating; the design decisions are the part
+worth being able to defend line by line.
